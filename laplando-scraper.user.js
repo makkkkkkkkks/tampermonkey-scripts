@@ -1,12 +1,10 @@
 // ==UserScript==
 // @name         Laplando Deep Scraper FINAL PRO v14
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      15.4
-// @description  Stable scraper with RAM fix + clean restart
+// @version      16.0
+// @description  Stateless list-page scraper (no visited state) — parses product tiles and paginates by URL
 // @match        https://laplando.pl/Laptopy-c24*
-// @match        https://laplando.pl/*-p*
 // @match        https://www.laplando.pl/Laptopy-c24*
-// @match        https://www.laplando.pl/*-p*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -20,10 +18,11 @@
 (function () {
 'use strict';
 
-const VERSION = "15.4";
+const VERSION = "16.0";
 console.log("%c[LAPLANDO] userscript v" + VERSION + " loaded @ " + location.href, "color:#e67e22;font-weight:bold;");
 
 const BASE_URL = "https://laplando.pl/Laptopy-c24";
+const SHEET_NAME = "Laplando";
 
 /* ===== CONFIG: endpoint stored in Tampermonkey storage (never committed) ===== */
 let googleScriptURL = GM_getValue("googleScriptURL", "");
@@ -35,164 +34,95 @@ GM_registerMenuCommand("⚙️ Set Google Script URL", () => {
         alert("Saved. Reload the page to apply.");
     }
 });
-
-const STORAGE_KEY = "laplando_state_v1";
+GM_registerMenuCommand("▶ Start from page 1", () => { location.href = BASE_URL; });
 
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
-function isProductPage(){ return location.href.includes("-p"); }
-
-/* ================= STATE ================= */
-
-function getState(){
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || JSON.stringify({
-        visited:[],
-        currentPage:1
-    }));
-}
-
-function saveState(state){
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
-function clearState(){
-    localStorage.removeItem(STORAGE_KEY);
-}
-
-GM_registerMenuCommand("RESET LAPLANDO SCRAPER", ()=>{
-    clearState();
-    alert("State cleared. Reload page.");
-});
-
-/* ================= HELPERS ================= */
-
-function normalizePrice(text){
-    if(!text) return "";
-    return text.replace(/ /g," ")
-        .replace(/\s+/g,"")
-        .replace("zł","")
-        .replace(",",".");
-}
-
-function extractRamGB(text){
-    return text.match(/(\d+)\s*GB/i)?.[1] || "";
-}
-
-function extractDisk(text){
-    const upper = text.toUpperCase();
-
-    let gb="";
-    if(upper.includes("TB")){
-        const n = upper.match(/(\d+)/)?.[1];
-        if(n) gb = parseInt(n)*1024;
-    } else {
-        gb = upper.match(/(\d+)\s*GB/)?.[1] || "";
-    }
-
-    let type="";
-    if(upper.includes("SSD")) type="SSD";
-    if(upper.includes("HDD")) type="HDD";
-    if(upper.includes("NVME")) type="NVMe";
-    if(upper.includes("EMMC")) type="eMMC";
-
-    return {gb,type};
-}
 
 /* ================= PARSER ================= */
 
-function parseSpecification(){
+function parseCard(tile){
+    const nameEl = tile.querySelector(".product-name a");
+    if(!nameEl) return null;
 
-    let data = {
-        producer:"",
-        model:"",
-        price:"",
-        cpu:"",
-        ram_gb:"",
-        ram_type:"",
-        disk_size:"",
-        disk_type:"",
-        link: location.href
-    };
+    const title = (nameEl.getAttribute("title") || nameEl.innerText || "").trim();
+    const link = nameEl.href;
 
-    const title = document.querySelector("h1")?.innerText.trim();
-    if(title){
-        const parts = title.split(/\s+/);
-        data.producer = parts[0] || "";
-        data.model = parts.slice(1).join(" ");
-    }
-
-    const priceEl = document.querySelector(".core_priceFormat");
+    // price (clean number from data-price)
+    const priceEl = tile.querySelector(".core_priceFormat");
+    let price = "";
     if(priceEl){
-        data.price = normalizePrice(priceEl.innerText);
+        price = (priceEl.getAttribute("data-price") || priceEl.innerText || "")
+            .replace(/\s+/g,"").replace("zł","").replace(",",".").trim();
     }
 
-    const rows = document.querySelectorAll("table.def tr.def");
+    // title example: "Laptop Lenovo ThinkPad T490 i5-8265U, | 16GB 500GB SSD | 14\" 1920 x 1080 | Windows 11 Pro [A]"
+    const segments = title.split("|").map(s=>s.trim());
+    let head = (segments[0] || "").replace(/,+$/,"").trim();
 
-rows.forEach(row=>{
-    const tds = row.querySelectorAll("td");
-    if(tds.length<2) return;
-
-    const key = tds[0].innerText.trim().toLowerCase();
-    const value = tds[1].innerText.trim();
+    let words = head.split(/\s+/);
+    if(words[0] && words[0].toLowerCase() === "laptop") words = words.slice(1);
+    const producer = words[0] || "";
 
     // CPU
-    if(key.includes("procesor")){
-        data.cpu = value;
+    const cpuMatch =
+        head.match(/\bi[3579][-\s]?\d{3,5}\w*\b/i) ||
+        head.match(/\bRyzen\s*\d+\s*(?:PRO\s*)?\d{3,5}\w*\b/i) ||
+        head.match(/\b(?:Celeron|Pentium|Athlon)\b[\w\s-]*/i);
+    const cpu = cpuMatch ? cpuMatch[0].replace(/,+$/,"").trim() : "";
+
+    // model = words after producer up to the CPU token
+    let afterProducer = words.slice(1).join(" ");
+    let model = afterProducer;
+    if(cpu){
+        const idx = afterProducer.indexOf(cpu);
+        if(idx > 0) model = afterProducer.slice(0, idx).trim();
+    }
+    model = model.replace(/,+$/,"").trim();
+
+    // RAM + disk from the rest of the title
+    const rest = segments.slice(1).join(" ");
+    const ramMatch = rest.match(/(\d+)\s*GB/i);
+    const ram_gb = ramMatch ? ramMatch[1] : "";
+
+    let disk_size = "";
+    let disk_type = "";
+    const diskMatch = rest.match(/(\d+)\s*(GB|TB)\s*(SSD|HDD|NVMe|eMMC)/i);
+    if(diskMatch){
+        disk_size = diskMatch[2].toUpperCase() === "TB" ? parseInt(diskMatch[1])*1024 : diskMatch[1];
+        disk_type = diskMatch[3].toUpperCase().replace("NVME","NVMe").replace("EMMC","eMMC");
+    } else {
+        const gbs = rest.match(/(\d+)\s*GB/gi);
+        if(gbs && gbs.length >= 2) disk_size = (gbs[1].match(/\d+/) || [""])[0];
+        if(/SSD/i.test(rest)) disk_type = "SSD";
+        else if(/HDD/i.test(rest)) disk_type = "HDD";
     }
 
-    if(!data.cpu && key.includes("seria procesora")){
-        data.cpu = value;
-    }
-
-    // RAM
-    if(key.includes("ilość pamięci ram")){
-        data.ram_gb = extractRamGB(value);
-    }
-
-    if(key.includes("typ pamięci ram")){
-        data.ram_type = value;
-    }
-
-    // Disk
-    if(key === "dysk"){
-        const disk = extractDisk(value);
-        data.disk_size = disk.gb;
-        if(disk.type) data.disk_type = disk.type;
-    }
-
-    if(key === "typ dysku"){
-        data.disk_type = value;
-    }
-});
-
-
-    return data;
+    return { producer, model, price, cpu, ram_gb, ram_type:"", disk_size, disk_type, link };
 }
 
 /* ================= GOOGLE ================= */
 
-// Returns { ok: boolean, status, body, error } — ok === true ONLY on {"ok":true} from doPost
-function sendToGoogle(row){
+// Returns { ok, status, body, parsed, error } — ok === true ONLY on {"ok":true} from doPost
+function sendToGoogle(batch){
     return new Promise(resolve=>{
-        console.log("[LAPLANDO] → sending:", row);
+        console.log("[LAPLANDO] → sending batch of", batch.length, "products");
         GM_xmlhttpRequest({
             method:"POST",
             url:googleScriptURL,
             headers:{"Content-Type":"application/json"},
-            data:JSON.stringify({ sheetName:"Laplando", data:[row] }),
+            data:JSON.stringify({ sheetName:SHEET_NAME, data:batch }),
             onload:(res)=>{
                 console.log("[LAPLANDO] ← Google status:", res.status);
                 console.log("[LAPLANDO] ← Google response:", res.responseText);
-
-                let ok = false;
-                let parsed = null;
+                let ok=false, parsed=null;
                 try {
                     parsed = JSON.parse(res.responseText);
-                    ok = (res.status >= 200 && res.status < 300) && parsed && parsed.ok === true;
+                    ok = (res.status>=200 && res.status<300) && parsed && parsed.ok === true;
                     if(!ok) console.error("[LAPLANDO] ⚠ server returned NOT ok:", parsed);
                 } catch(e){
                     console.error("[LAPLANDO] ⚠ response is NOT JSON (likely a Google error page):", e);
                 }
-                resolve({ ok: ok, status: res.status, body: res.responseText, parsed: parsed });
+                resolve({ ok, status:res.status, body:res.responseText, parsed });
             },
             onerror:(err)=>{ console.error("[LAPLANDO] ✖ request FAILED (network):", err); resolve({ ok:false, error:"network" }); },
             ontimeout:()=>{ console.error("[LAPLANDO] ✖ request TIMEOUT"); resolve({ ok:false, error:"timeout" }); }
@@ -200,121 +130,24 @@ function sendToGoogle(row){
     });
 }
 
-// Pull a human-readable error out of whatever Google returned
 function extractError(result){
-    if(result.error) return result.error;                                  // network / timeout
-    if(result.parsed && result.parsed.error) return String(result.parsed.error); // doPost {ok:false,error:...}
+    if(result.error) return result.error;
+    if(result.parsed && result.parsed.error) return String(result.parsed.error);
     if(result.body){
-        // Google Apps Script HTML error page (e.g. "Функцію сценарію doPost не знайдено")
         let m = result.body.match(/600px"[^>]*>([^<]+)</)
              || result.body.match(/class="errorMessage"[^>]*>([^<]+)</)
              || result.body.match(/<title>([^<]+)<\/title>/i);
         if(m) return m[1].trim();
-        return result.body.slice(0, 300);                                  // fallback: first 300 chars
+        return result.body.slice(0, 300);
     }
     return "unknown error (HTTP " + (result.status || "-") + ")";
 }
 
-/* ================= PRODUCT ================= */
-
-async function processProduct(){
-
-    await sleep(1000);
-
-    let state = getState();
-
-    if(state.visited.includes(location.href)){
-        goBack();
-        return;
-    }
-
-    const spec = parseSpecification();
-    console.log("Parsed:",spec);
-
-    const result = await sendToGoogle(spec);
-
-    // STOP the whole scraper on anything that is not a clean success
-    if(!result.ok){
-        const detail = extractError(result);
-        console.error("%c[LAPLANDO] ⛔ STOPPED — send failed. HTTP " + (result.status||"-") + " — " + detail,
-            "color:#c0392b;font-weight:bold;font-size:14px;");
-        console.error("[LAPLANDO] full response body:", result.body);
-        alert("LAPLANDO: надсилання в Google НЕ вдалося — скрипт зупинено.\n\n" +
-              "HTTP status: " + (result.status || "-") + "\n\n" +
-              "Повідомлення від Google:\n" + detail + "\n\n" +
-              "(повна відповідь — у консолі F12). Виправ і онови сторінку, щоб продовжити.");
-        return; // ← do NOT mark visited, do NOT navigate further
-    }
-
-    state.visited.push(location.href);
-    saveState(state);
-
-    await sleep(1000);
-    goBack();
-}
-
-/* ================= LIST ================= */
+/* ================= PAGINATION ================= */
 
 function getCurrentPage(){
-    const match = location.pathname.match(/pa\/(\d+)/);
-    return match ? parseInt(match[1]) : 1;
-}
-
-function goBack(){
-    const state = getState();
-    const page = state.currentPage || 1;
-
-    if(page===1){
-        location.href = BASE_URL + "/";
-    } else {
-        location.href = BASE_URL + "/pa/" + page;
-    }
-}
-
-function goNextPage(){
-
-    let state = getState();
-
-    state.currentPage = (state.currentPage || 1) + 1;
-    saveState(state);
-
-    const nextUrl = BASE_URL + "/pa/" + state.currentPage;
-    location.href = nextUrl;
-}
-
-async function processListPage(){
-
-    await sleep(1500);
-
-    const state = getState();
-    state.currentPage = getCurrentPage();
-    saveState(state);
-
-    const links = Array.from(document.querySelectorAll('a[href*="-p"]'))
-        .map(a=>a.href)
-        .filter(link=>link.includes("laplando.pl"));
-
-    const unique = [...new Set(links)];
-    const unvisited = unique.filter(link=>!state.visited.includes(link));
-
-    console.log("[LAPLANDO] Products found:",unique.length,"| Unvisited:",unvisited.length,"| page:",state.currentPage);
-
-    // No product links at all → end of catalog (or selector broken) → STOP, don't flip forever
-    if(unique.length===0){
-        console.warn("%c[LAPLANDO] ⛔ No product links on this page — reached the end (or selector changed). Stopping.",
-            "color:#c0392b;font-weight:bold;");
-        return;
-    }
-
-    // All products on this page already done → go to the next page
-    if(unvisited.length===0){
-        console.log("[LAPLANDO] All products on this page already visited → next page. visited total:", state.visited.length);
-        goNextPage();
-        return;
-    }
-
-    console.log("[LAPLANDO] → opening product:", unvisited[0]);
-    location.href = unvisited[0];
+    const m = location.pathname.match(/pa\/(\d+)/);
+    return m ? parseInt(m[1]) : 1;
 }
 
 /* ================= RUN ================= */
@@ -324,19 +157,67 @@ async function run(){
         console.warn("[LAPLANDO] Google URL not set — Tampermonkey menu → ⚙️ Set Google Script URL");
         return;
     }
-    console.log("[LAPLANDO] run — isProductPage:", isProductPage(), "| url:", location.href);
-    if(isProductPage()){
-        await processProduct();
-    } else {
-        await processListPage();
+
+    await sleep(1000);
+
+    // wait for product tiles to render
+    let tiles = document.querySelectorAll(".product-tile");
+    let tries = 0;
+    while(tiles.length === 0 && tries < 12){
+        await sleep(500);
+        tiles = document.querySelectorAll(".product-tile");
+        tries++;
     }
+
+    const page = getCurrentPage();
+
+    // no tiles → end of catalog (or selector changed) → STOP
+    if(tiles.length === 0){
+        console.warn("%c[LAPLANDO] ⛔ No product tiles on page " + page + " — reached the end. Stopping.",
+            "color:#c0392b;font-weight:bold;");
+        return;
+    }
+
+    const batch = [];
+    tiles.forEach(t=>{
+        const d = parseCard(t);
+        if(d && d.producer && d.price) batch.push(d);
+    });
+
+    console.log("[LAPLANDO] page", page, "— tiles:", tiles.length, "| parsed:", batch.length);
+
+    if(batch.length === 0){
+        console.warn("[LAPLANDO] ⛔ Tiles found but nothing parsed — stopping (check parseCard selectors).");
+        return;
+    }
+
+    const result = await sendToGoogle(batch);
+
+    // STOP on anything that is not a clean success
+    if(!result.ok){
+        const detail = extractError(result);
+        console.error("%c[LAPLANDO] ⛔ STOPPED — send failed. HTTP " + (result.status||"-") + " — " + detail,
+            "color:#c0392b;font-weight:bold;font-size:14px;");
+        console.error("[LAPLANDO] full response body:", result.body);
+        alert("LAPLANDO: надсилання в Google НЕ вдалося — скрипт зупинено.\n\n" +
+              "HTTP status: " + (result.status || "-") + "\n\n" +
+              "Повідомлення від Google:\n" + detail + "\n\n" +
+              "(повна відповідь — у консолі F12). Виправ і онови сторінку, щоб продовжити.");
+        return;
+    }
+
+    // delay, then next page by URL
+    await sleep(1500);
+    const nextUrl = BASE_URL + "/pa/" + (page + 1);
+    console.log("[LAPLANDO] → next page:", nextUrl);
+    location.href = nextUrl;
 }
 
 // run even if the 'load' event already fired before injection (document-idle)
 if(document.readyState === "complete"){
-  run();
+    run();
 } else {
-  window.addEventListener("load", run);
+    window.addEventListener("load", run);
 }
 
 })();
