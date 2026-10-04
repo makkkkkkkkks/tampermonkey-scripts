@@ -1,0 +1,6 @@
+# Never commit secrets or local artifacts
+*.local
+*.secret
+.env
+.DS_Store
+Thumbs.db
