@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Laplando Deep Scraper FINAL PRO v14
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      15.1
+// @version      15.2
 // @description  Stable scraper with RAM fix + clean restart
 // @match        https://laplando.pl/Laptopy-c24*
 // @match        https://laplando.pl/*-p*
@@ -20,7 +20,7 @@
 (function () {
 'use strict';
 
-const VERSION = "15.1";
+const VERSION = "15.2";
 console.log("%c[LAPLANDO] userscript v" + VERSION + " loaded @ " + location.href, "color:#e67e22;font-weight:bold;");
 
 const BASE_URL = "https://laplando.pl/Laptopy-c24";
@@ -280,10 +280,18 @@ async function processListPage(){
     const unique = [...new Set(links)];
     const unvisited = unique.filter(link=>!state.visited.includes(link));
 
-    console.log("Products found:",unique.length);
-    console.log("Unvisited:",unvisited.length);
+    console.log("[LAPLANDO] Products found:",unique.length,"| Unvisited:",unvisited.length,"| page:",state.currentPage);
 
+    // No product links at all → end of catalog (or selector broken) → STOP, don't flip forever
+    if(unique.length===0){
+        console.warn("%c[LAPLANDO] ⛔ No product links on this page — reached the end (or selector changed). Stopping.",
+            "color:#c0392b;font-weight:bold;");
+        return;
+    }
+
+    // All products on this page already done → go to the next page
     if(unvisited.length===0){
+        console.log("[LAPLANDO] All products on this page already visited → next page");
         goNextPage();
         return;
     }
