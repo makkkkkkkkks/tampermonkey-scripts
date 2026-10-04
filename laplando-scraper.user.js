@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Laplando Deep Scraper FINAL PRO v14
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      15.3
+// @version      15.4
 // @description  Stable scraper with RAM fix + clean restart
 // @match        https://laplando.pl/Laptopy-c24*
 // @match        https://laplando.pl/*-p*
@@ -20,7 +20,7 @@
 (function () {
 'use strict';
 
-const VERSION = "15.3";
+const VERSION = "15.4";
 console.log("%c[LAPLANDO] userscript v" + VERSION + " loaded @ " + location.href, "color:#e67e22;font-weight:bold;");
 
 const BASE_URL = "https://laplando.pl/Laptopy-c24";
@@ -308,11 +308,12 @@ async function processListPage(){
 
     // All products on this page already done → go to the next page
     if(unvisited.length===0){
-        console.log("[LAPLANDO] All products on this page already visited → next page");
+        console.log("[LAPLANDO] All products on this page already visited → next page. visited total:", state.visited.length);
         goNextPage();
         return;
     }
 
+    console.log("[LAPLANDO] → opening product:", unvisited[0]);
     location.href = unvisited[0];
 }
 
@@ -323,6 +324,7 @@ async function run(){
         console.warn("[LAPLANDO] Google URL not set — Tampermonkey menu → ⚙️ Set Google Script URL");
         return;
     }
+    console.log("[LAPLANDO] run — isProductPage:", isProductPage(), "| url:", location.href);
     if(isProductPage()){
         await processProduct();
     } else {
