@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ERLI Deep Scraper PRO v3
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      3.0
+// @version      4.0
 // @description  Stable ERLI scraper (fixed navigation + producer parsing)
 // @match        https://tip.erli.pl/*
 // @match        https://erli.pl/*
@@ -17,6 +17,9 @@
 
 (function () {
     'use strict';
+
+    const VERSION = "4.0";
+    console.log("%c[ERLI] userscript v" + VERSION + " loaded @ " + location.href, "color:#8e44ad;font-weight:bold;");
 
     const BASE_URL = "https://tip.erli.pl/produkty?cat[]=2322";
 
@@ -120,30 +123,50 @@ if (title) {
         return data;
     }
 
+    // Returns { ok, status, body, parsed, error } — ok === true ONLY on {"ok":true} from doPost
     function sendToGoogle(row) {
 
         return new Promise(resolve => {
 
-            log("📤 Sending to Google...");
+            log("📤 → sending:", row);
 
             GM_xmlhttpRequest({
                 method: "POST",
                 url: GOOGLE_URL,
                 headers: { "Content-Type": "application/json" },
-                data: JSON.stringify([row]),
+                data: JSON.stringify({ sheetName: "Erli", data: [row] }),
 
-                onload: function(response) {
-                    log("✅ Google status:", response.status);
-                    log("Response:", response.responseText);
-                    resolve();
+                onload: function(res) {
+                    log("← Google status:", res.status);
+                    log("← Google response:", res.responseText);
+                    let ok = false, parsed = null;
+                    try {
+                        parsed = JSON.parse(res.responseText);
+                        ok = (res.status >= 200 && res.status < 300) && parsed && parsed.ok === true;
+                        if (!ok) console.error("[ERLI] ⚠ server returned NOT ok:", parsed);
+                    } catch (e) {
+                        console.error("[ERLI] ⚠ response is NOT JSON (likely a Google error page):", e);
+                    }
+                    resolve({ ok, status: res.status, body: res.responseText, parsed });
                 },
 
-                onerror: function(error) {
-                    log("❌ Google error:", error);
-                    resolve();
-                }
+                onerror: function(err) { console.error("[ERLI] ✖ request FAILED (network):", err); resolve({ ok: false, error: "network" }); },
+                ontimeout: function() { console.error("[ERLI] ✖ request TIMEOUT"); resolve({ ok: false, error: "timeout" }); }
             });
         });
+    }
+
+    function extractError(result) {
+        if (result.error) return result.error;
+        if (result.parsed && result.parsed.error) return String(result.parsed.error);
+        if (result.body) {
+            let m = result.body.match(/600px"[^>]*>([^<]+)</)
+                 || result.body.match(/class="errorMessage"[^>]*>([^<]+)</)
+                 || result.body.match(/<title>([^<]+)<\/title>/i);
+            if (m) return m[1].trim();
+            return result.body.slice(0, 300);
+        }
+        return "unknown error (HTTP " + (result.status || "-") + ")";
     }
 
     async function processProduct() {
@@ -155,7 +178,19 @@ if (title) {
             return;
         }
 
-        await sendToGoogle(data);
+        const result = await sendToGoogle(data);
+
+        if (!result.ok) {
+            const detail = extractError(result);
+            console.error("%c[ERLI] ⛔ STOPPED — send failed. HTTP " + (result.status || "-") + " — " + detail,
+                "color:#c0392b;font-weight:bold;font-size:14px;");
+            console.error("[ERLI] full response body:", result.body);
+            alert("ERLI: надсилання в Google НЕ вдалося — скрипт зупинено.\n\n" +
+                  "HTTP status: " + (result.status || "-") + "\n\n" +
+                  "Повідомлення від Google:\n" + detail + "\n\n" +
+                  "(повна відповідь — у консолі F12). Виправ і онови сторінку.");
+            return; // STOP: do not navigate back / continue
+        }
 
         await sleep(1500);
 
@@ -226,6 +261,11 @@ if (title) {
         }
     }
 
-    window.addEventListener("load", run);
+    // run even if the 'load' event already fired before injection (document-idle)
+    if (document.readyState === "complete") {
+        run();
+    } else {
+        window.addEventListener("load", run);
+    }
 
 })();
