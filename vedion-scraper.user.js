@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VEDION SCRAPER STABLE
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      1.0
+// @version      1.1
 // @match        https://www.vedion.pl/laptopy-poleasingowe*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
@@ -15,6 +15,9 @@
 
 (function () {
 'use strict';
+
+const VERSION = "1.1";
+console.log("%c[VEDION] userscript v" + VERSION + " loaded", "color:#0984e3;font-weight:bold;");
 
 /* ===== CONFIG: endpoint stored in Tampermonkey storage (never committed) ===== */
 let googleScriptURL = GM_getValue("googleScriptURL", "");
