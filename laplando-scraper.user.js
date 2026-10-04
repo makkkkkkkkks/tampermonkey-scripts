@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Laplando Deep Scraper FINAL PRO v14
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      15.0
+// @version      15.1
 // @description  Stable scraper with RAM fix + clean restart
 // @match        https://laplando.pl/Laptopy-c24*
 // @match        https://laplando.pl/*-p*
@@ -20,7 +20,7 @@
 (function () {
 'use strict';
 
-const VERSION = "15.0";
+const VERSION = "15.1";
 console.log("%c[LAPLANDO] userscript v" + VERSION + " loaded @ " + location.href, "color:#e67e22;font-weight:bold;");
 
 const BASE_URL = "https://laplando.pl/Laptopy-c24";
@@ -170,6 +170,7 @@ rows.forEach(row=>{
 
 /* ================= GOOGLE ================= */
 
+// Returns { ok: boolean, status, body, error } — ok === true ONLY on {"ok":true} from doPost
 function sendToGoogle(row){
     return new Promise(resolve=>{
         console.log("[LAPLANDO] → sending:", row);
@@ -181,10 +182,20 @@ function sendToGoogle(row){
             onload:(res)=>{
                 console.log("[LAPLANDO] ← Google status:", res.status);
                 console.log("[LAPLANDO] ← Google response:", res.responseText);
-                resolve();
+
+                let ok = false;
+                let parsed = null;
+                try {
+                    parsed = JSON.parse(res.responseText);
+                    ok = (res.status >= 200 && res.status < 300) && parsed && parsed.ok === true;
+                    if(!ok) console.error("[LAPLANDO] ⚠ server returned NOT ok:", parsed);
+                } catch(e){
+                    console.error("[LAPLANDO] ⚠ response is NOT JSON (likely a Google error page):", e);
+                }
+                resolve({ ok: ok, status: res.status, body: res.responseText, parsed: parsed });
             },
-            onerror:(err)=>{ console.error("[LAPLANDO] ✖ request FAILED:", err); resolve(); },
-            ontimeout:()=>{ console.error("[LAPLANDO] ✖ request TIMEOUT"); resolve(); }
+            onerror:(err)=>{ console.error("[LAPLANDO] ✖ request FAILED (network):", err); resolve({ ok:false, error:"network" }); },
+            ontimeout:()=>{ console.error("[LAPLANDO] ✖ request TIMEOUT"); resolve({ ok:false, error:"timeout" }); }
         });
     });
 }
@@ -205,7 +216,18 @@ async function processProduct(){
     const spec = parseSpecification();
     console.log("Parsed:",spec);
 
-    await sendToGoogle(spec);
+    const result = await sendToGoogle(spec);
+
+    // STOP the whole scraper on anything that is not a clean success
+    if(!result.ok){
+        console.error("%c[LAPLANDO] ⛔ STOPPED — send was not successful. Fix the issue and reload the page to resume.",
+            "color:#c0392b;font-weight:bold;font-size:14px;");
+        alert("LAPLANDO: надсилання в Google НЕ вдалося — скрипт зупинено.\n\n" +
+              "status: " + (result.status || "-") + "\n" +
+              "error: " + (result.error || (result.parsed && result.parsed.error) || "див. консоль") + "\n\n" +
+              "Відкрий консоль (F12) для деталей. Виправ і онови сторінку, щоб продовжити.");
+        return; // ← do NOT mark visited, do NOT navigate further
+    }
 
     state.visited.push(location.href);
     saveState(state);
