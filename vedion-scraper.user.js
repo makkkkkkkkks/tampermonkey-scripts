@@ -1,8 +1,9 @@
 // ==UserScript==
 // @name         VEDION SCRAPER STABLE
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      1.1
+// @version      1.2
 // @match        https://www.vedion.pl/laptopy-poleasingowe*
+// @match        https://vedion.pl/laptopy-poleasingowe*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -16,8 +17,8 @@
 (function () {
 'use strict';
 
-const VERSION = "1.1";
-console.log("%c[VEDION] userscript v" + VERSION + " loaded", "color:#0984e3;font-weight:bold;");
+const VERSION = "1.2";
+console.log("%c[VEDION] userscript v" + VERSION + " loaded @ " + location.href, "color:#0984e3;font-weight:bold;");
 
 /* ===== CONFIG: endpoint stored in Tampermonkey storage (never committed) ===== */
 let googleScriptURL = GM_getValue("googleScriptURL", "");
@@ -140,12 +141,20 @@ async function processPage(){
 
 /* ================= RUN ================= */
 
-window.addEventListener("load", async ()=>{
+async function run(){
   if(!googleScriptURL){
     console.warn("[VEDION] Google URL not set — Tampermonkey menu → ⚙️ Set Google Script URL");
     return;
   }
+  console.log("[VEDION] run() — scraping products on this page");
   await processPage();
-});
+}
+
+// run even if the 'load' event already fired before injection (document-idle)
+if(document.readyState === "complete"){
+  run();
+} else {
+  window.addEventListener("load", run);
+}
 
 })();
