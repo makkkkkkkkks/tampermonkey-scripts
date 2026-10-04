@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VEDION SCRAPER STABLE
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      1.4
+// @version      1.5
 // @match        https://www.vedion.pl/laptopy-poleasingowe*
 // @match        https://vedion.pl/laptopy-poleasingowe*
 // @grant        GM_xmlhttpRequest
@@ -17,7 +17,7 @@
 (function () {
 'use strict';
 
-const VERSION = "1.4";
+const VERSION = "1.5";
 console.log("%c[VEDION] userscript v" + VERSION + " loaded @ " + location.href, "color:#0984e3;font-weight:bold;");
 
 /* ===== CONFIG: endpoint stored in Tampermonkey storage (never committed) ===== */
@@ -106,6 +106,9 @@ async function processPage(){
 
   console.log("[VEDION] Products on this page:", products.length);
 
+  // collect ALL products of this page into one batch
+  const batch = [];
+
   for(const product of products){
 
     const titleEl = product.querySelector(".product__name");
@@ -127,48 +130,38 @@ async function processPage(){
 
     const parsed = parseTitle(title);
 
-    const productData = {
-      ...parsed,
-      price,
-      link
-    };
+    batch.push({ ...parsed, price, link });
+  }
 
-    const payload = JSON.stringify({
-      sheetName:SHEET_NAME,
-      data:[productData]
-    });
+  console.log("[VEDION] → sending batch of", batch.length, "products");
 
-    console.log("[VEDION] → sending:", productData);
-
+  // Send ALL products of this page in ONE request and WAIT for the response
+  // BEFORE navigating. Previously each product was a separate async request and
+  // the page navigated away before they finished → most got cancelled (only ~1-2 arrived).
+  await new Promise((resolve)=>{
     GM_xmlhttpRequest({
       method:"POST",
       url:googleScriptURL,
       headers:{ "Content-Type":"application/json" },
-      data:payload,
+      data:JSON.stringify({ sheetName:SHEET_NAME, data:batch }),
       onload: (res)=>{
         console.log("[VEDION] ← Google status:", res.status, res.statusText);
         console.log("[VEDION] ← Google response:", res.responseText);
-        if(res.status < 200 || res.status >= 300){
-          console.error("[VEDION] ⚠ non-2xx response for:", productData.link);
-        }
+        resolve();
       },
-      onerror: (err)=>{
-        console.error("[VEDION] ✖ request FAILED for:", productData.link, err);
-      },
-      ontimeout: ()=>{
-        console.error("[VEDION] ✖ request TIMEOUT for:", productData.link);
-      }
+      onerror: (err)=>{ console.error("[VEDION] ✖ request FAILED:", err); resolve(); },
+      ontimeout: ()=>{ console.error("[VEDION] ✖ request TIMEOUT"); resolve(); }
     });
+  });
 
-    await sleep(100);
-  }
+  // delay after each page so the request fully settles before leaving
+  await sleep(1500);
 
   // наступна сторінка
   const state = getState();
   state.page++;
   saveState(state);
 
-  await sleep(100);
   window.location.href = location.origin + location.pathname + "?counter=" + state.page;
 }
 
