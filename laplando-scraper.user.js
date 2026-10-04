@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Laplando Deep Scraper FINAL PRO v14
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      15.2
+// @version      15.3
 // @description  Stable scraper with RAM fix + clean restart
 // @match        https://laplando.pl/Laptopy-c24*
 // @match        https://laplando.pl/*-p*
@@ -20,7 +20,7 @@
 (function () {
 'use strict';
 
-const VERSION = "15.2";
+const VERSION = "15.3";
 console.log("%c[LAPLANDO] userscript v" + VERSION + " loaded @ " + location.href, "color:#e67e22;font-weight:bold;");
 
 const BASE_URL = "https://laplando.pl/Laptopy-c24";
@@ -200,6 +200,21 @@ function sendToGoogle(row){
     });
 }
 
+// Pull a human-readable error out of whatever Google returned
+function extractError(result){
+    if(result.error) return result.error;                                  // network / timeout
+    if(result.parsed && result.parsed.error) return String(result.parsed.error); // doPost {ok:false,error:...}
+    if(result.body){
+        // Google Apps Script HTML error page (e.g. "Функцію сценарію doPost не знайдено")
+        let m = result.body.match(/600px"[^>]*>([^<]+)</)
+             || result.body.match(/class="errorMessage"[^>]*>([^<]+)</)
+             || result.body.match(/<title>([^<]+)<\/title>/i);
+        if(m) return m[1].trim();
+        return result.body.slice(0, 300);                                  // fallback: first 300 chars
+    }
+    return "unknown error (HTTP " + (result.status || "-") + ")";
+}
+
 /* ================= PRODUCT ================= */
 
 async function processProduct(){
@@ -220,12 +235,14 @@ async function processProduct(){
 
     // STOP the whole scraper on anything that is not a clean success
     if(!result.ok){
-        console.error("%c[LAPLANDO] ⛔ STOPPED — send was not successful. Fix the issue and reload the page to resume.",
+        const detail = extractError(result);
+        console.error("%c[LAPLANDO] ⛔ STOPPED — send failed. HTTP " + (result.status||"-") + " — " + detail,
             "color:#c0392b;font-weight:bold;font-size:14px;");
+        console.error("[LAPLANDO] full response body:", result.body);
         alert("LAPLANDO: надсилання в Google НЕ вдалося — скрипт зупинено.\n\n" +
-              "status: " + (result.status || "-") + "\n" +
-              "error: " + (result.error || (result.parsed && result.parsed.error) || "див. консоль") + "\n\n" +
-              "Відкрий консоль (F12) для деталей. Виправ і онови сторінку, щоб продовжити.");
+              "HTTP status: " + (result.status || "-") + "\n\n" +
+              "Повідомлення від Google:\n" + detail + "\n\n" +
+              "(повна відповідь — у консолі F12). Виправ і онови сторінку, щоб продовжити.");
         return; // ← do NOT mark visited, do NOT navigate further
     }
 
