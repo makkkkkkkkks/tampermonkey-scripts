@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VEDION SCRAPER STABLE
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      1.2
+// @version      1.3
 // @match        https://www.vedion.pl/laptopy-poleasingowe*
 // @match        https://vedion.pl/laptopy-poleasingowe*
 // @grant        GM_xmlhttpRequest
@@ -17,7 +17,7 @@
 (function () {
 'use strict';
 
-const VERSION = "1.2";
+const VERSION = "1.3";
 console.log("%c[VEDION] userscript v" + VERSION + " loaded @ " + location.href, "color:#0984e3;font-weight:bold;");
 
 /* ===== CONFIG: endpoint stored in Tampermonkey storage (never committed) ===== */
@@ -88,7 +88,23 @@ async function processPage(){
 
   await sleep(100);
 
-  const products = document.querySelectorAll(".product");
+  // wait for products to render (page is server-rendered, usually instant)
+  let products = document.querySelectorAll(".product");
+  let tries = 0;
+  while(products.length === 0 && tries < 10){
+    await sleep(500);
+    products = document.querySelectorAll(".product");
+    tries++;
+  }
+
+  // no products → this counter page does not exist / last page reached → STOP
+  if(products.length === 0){
+    console.log("[VEDION] No products found — reached the last page. Stopping pagination.");
+    localStorage.removeItem(STORAGE_KEY); // reset so a fresh run starts from page 1
+    return;
+  }
+
+  console.log("[VEDION] Products on this page:", products.length);
 
   for(const product of products){
 
