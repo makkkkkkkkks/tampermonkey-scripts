@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Empik Laptop Scraper PRO v4
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      4.0
+// @version      5.0
 // @description  Stable Empik scraper (RAM/Disk/Price fixed)
 // @match        https://www.empik.com/elektronika/komputery-i-laptopy/laptopy,362105,s*
 // @match        https://www.empik.com/*,p*
@@ -19,6 +19,9 @@
   "use strict";
 
   const SITE = "EMPIK";
+  const VERSION = "5.0";
+  console.log("%c[EMPIK] userscript v" + VERSION + " loaded @ " + location.href, "color:#2d3436;font-weight:bold;");
+
   const START_URL = "https://www.empik.com/elektronika/komputery-i-laptopy/laptopy,362105,s";
 
   /* ===== CONFIG: endpoint stored in Tampermonkey storage (never committed) ===== */
@@ -215,26 +218,63 @@
 
     log("Parsed:", data);
 
-    await sendToGoogle(data);
-    await sleep(1200);
+    const result = await sendToGoogle(data);
 
+    if (!result.ok) {
+      const detail = extractError(result);
+      console.error("%c[EMPIK] ⛔ STOPPED — send failed. HTTP " + (result.status || "-") + " — " + detail,
+        "color:#c0392b;font-weight:bold;font-size:14px;");
+      console.error("[EMPIK] full response body:", result.body);
+      alert("EMPIK: надсилання в Google НЕ вдалося — скрипт зупинено.\n\n" +
+            "HTTP status: " + (result.status || "-") + "\n\n" +
+            "Повідомлення від Google:\n" + detail + "\n\n" +
+            "(повна відповідь — у консолі F12). Виправ і онови сторінку.");
+      return; // STOP: do not navigate back / continue
+    }
+
+    await sleep(1200);
     location.href = sessionStorage.getItem("listUrl") || START_URL;
   }
 
+  // Returns { ok, status, body, parsed, error } — ok === true ONLY on {"ok":true} from doPost
   function sendToGoogle(row) {
     return new Promise(resolve => {
+      log("→ sending:", row);
       GM_xmlhttpRequest({
         method: "POST",
         url: GOOGLE_URL,
         headers: { "Content-Type": "application/json" },
-        data: JSON.stringify([row]),
+        data: JSON.stringify({ sheetName: "Empik", data: [row] }),
         onload: res => {
-          log("Google:", res.status);
-          resolve();
+          log("← Google status:", res.status);
+          log("← Google response:", res.responseText);
+          let ok = false, parsed = null;
+          try {
+            parsed = JSON.parse(res.responseText);
+            ok = (res.status >= 200 && res.status < 300) && parsed && parsed.ok === true;
+            if (!ok) console.error("[EMPIK] ⚠ server returned NOT ok:", parsed);
+          } catch (e) {
+            console.error("[EMPIK] ⚠ response is NOT JSON (likely a Google error page):", e);
+          }
+          resolve({ ok, status: res.status, body: res.responseText, parsed });
         },
-        onerror: () => resolve()
+        onerror: err => { console.error("[EMPIK] ✖ request FAILED (network):", err); resolve({ ok: false, error: "network" }); },
+        ontimeout: () => { console.error("[EMPIK] ✖ request TIMEOUT"); resolve({ ok: false, error: "timeout" }); }
       });
     });
+  }
+
+  function extractError(result) {
+    if (result.error) return result.error;
+    if (result.parsed && result.parsed.error) return String(result.parsed.error);
+    if (result.body) {
+      let m = result.body.match(/600px"[^>]*>([^<]+)</)
+           || result.body.match(/class="errorMessage"[^>]*>([^<]+)</)
+           || result.body.match(/<title>([^<]+)<\/title>/i);
+      if (m) return m[1].trim();
+      return result.body.slice(0, 300);
+    }
+    return "unknown error (HTTP " + (result.status || "-") + ")";
   }
 
   async function processList() {
@@ -291,7 +331,12 @@
     }
   }
 
-  window.addEventListener("load", run);
+  // run even if the 'load' event already fired before injection (document-idle)
+  if (document.readyState === "complete") {
+    run();
+  } else {
+    window.addEventListener("load", run);
+  }
 
   let lastHref = location.href;
   setInterval(() => {
