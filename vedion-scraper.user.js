@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         VEDION SCRAPER STABLE
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      1.3
+// @version      1.4
 // @match        https://www.vedion.pl/laptopy-poleasingowe*
 // @match        https://vedion.pl/laptopy-poleasingowe*
 // @grant        GM_xmlhttpRequest
@@ -17,7 +17,7 @@
 (function () {
 'use strict';
 
-const VERSION = "1.3";
+const VERSION = "1.4";
 console.log("%c[VEDION] userscript v" + VERSION + " loaded @ " + location.href, "color:#0984e3;font-weight:bold;");
 
 /* ===== CONFIG: endpoint stored in Tampermonkey storage (never committed) ===== */
@@ -133,14 +133,31 @@ async function processPage(){
       link
     };
 
+    const payload = JSON.stringify({
+      sheetName:SHEET_NAME,
+      data:[productData]
+    });
+
+    console.log("[VEDION] → sending:", productData);
+
     GM_xmlhttpRequest({
       method:"POST",
       url:googleScriptURL,
       headers:{ "Content-Type":"application/json" },
-      data:JSON.stringify({
-        sheetName:SHEET_NAME,
-        data:[productData]
-      })
+      data:payload,
+      onload: (res)=>{
+        console.log("[VEDION] ← Google status:", res.status, res.statusText);
+        console.log("[VEDION] ← Google response:", res.responseText);
+        if(res.status < 200 || res.status >= 300){
+          console.error("[VEDION] ⚠ non-2xx response for:", productData.link);
+        }
+      },
+      onerror: (err)=>{
+        console.error("[VEDION] ✖ request FAILED for:", productData.link, err);
+      },
+      ontimeout: ()=>{
+        console.error("[VEDION] ✖ request TIMEOUT for:", productData.link);
+      }
     });
 
     await sleep(100);
