@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         Laplando Deep Scraper FINAL PRO v14
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      14.0
+// @version      15.0
 // @description  Stable scraper with RAM fix + clean restart
 // @match        https://laplando.pl/Laptopy-c24*
 // @match        https://laplando.pl/*-p*
+// @match        https://www.laplando.pl/Laptopy-c24*
+// @match        https://www.laplando.pl/*-p*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -17,6 +19,9 @@
 
 (function () {
 'use strict';
+
+const VERSION = "15.0";
+console.log("%c[LAPLANDO] userscript v" + VERSION + " loaded @ " + location.href, "color:#e67e22;font-weight:bold;");
 
 const BASE_URL = "https://laplando.pl/Laptopy-c24";
 
@@ -167,13 +172,19 @@ rows.forEach(row=>{
 
 function sendToGoogle(row){
     return new Promise(resolve=>{
+        console.log("[LAPLANDO] → sending:", row);
         GM_xmlhttpRequest({
             method:"POST",
             url:googleScriptURL,
             headers:{"Content-Type":"application/json"},
-            data:JSON.stringify([row]),
-            onload:()=>resolve(),
-            onerror:()=>resolve()
+            data:JSON.stringify({ sheetName:"Laplando", data:[row] }),
+            onload:(res)=>{
+                console.log("[LAPLANDO] ← Google status:", res.status);
+                console.log("[LAPLANDO] ← Google response:", res.responseText);
+                resolve();
+            },
+            onerror:(err)=>{ console.error("[LAPLANDO] ✖ request FAILED:", err); resolve(); },
+            ontimeout:()=>{ console.error("[LAPLANDO] ✖ request TIMEOUT"); resolve(); }
         });
     });
 }
@@ -272,6 +283,11 @@ async function run(){
     }
 }
 
-window.addEventListener("load",run);
+// run even if the 'load' event already fired before injection (document-idle)
+if(document.readyState === "complete"){
+  run();
+} else {
+  window.addEventListener("load", run);
+}
 
 })();
