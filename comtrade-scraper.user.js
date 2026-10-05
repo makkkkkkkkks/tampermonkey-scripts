@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         COMTRADE SCRAPER STABLE + LOGS
 // @namespace    https://github.com/makkkkkkkkks/tampermonkey-scripts
-// @version      2.1
+// @version      3.0
 // @description  Scrapes comtrade.pl refurbished laptops and pushes rows to a Google Apps Script endpoint.
 // @author       makkkkkkkkks
 // @match        https://www.comtrade.pl/laptopy-poleasingowe*
+// @match        https://comtrade.pl/laptopy-poleasingowe*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -17,6 +18,9 @@
 
 (function () {
 'use strict';
+
+const VERSION = "3.0";
+console.log("%c[COMTRADE] userscript v" + VERSION + " loaded @ " + location.href, "color:#16a085;font-weight:bold;");
 
 /* ================= CONFIG =================
  * The Google Apps Script URL is a write-enabled endpoint (effectively a secret),
@@ -50,15 +54,11 @@ function saveState(state){
 /* ================= PARSER ================= */
 
 function parseTitle(title){
-
   title = normalize(title);
-
   const mainPart = title.split("Core")[0].trim();
   const words = mainPart.split(" ");
-
   const producer = words[0] || "";
   const model = words.slice(1).join(" ").trim();
-
   return { producer, model };
 }
 
@@ -66,12 +66,29 @@ function parseTitle(title){
 
 async function processPage(){
 
-  console.log("=== START PAGE SCRAPE ===");
+  console.log("[COMTRADE] === START PAGE SCRAPE ===");
 
   await sleep(500);
 
-  const products = document.querySelectorAll(".product");
-  console.log("Found products:", products.length);
+  // wait for products to render
+  let products = document.querySelectorAll(".product");
+  let tries = 0;
+  while(products.length === 0 && tries < 10){
+    await sleep(500);
+    products = document.querySelectorAll(".product");
+    tries++;
+  }
+
+  console.log("[COMTRADE] Found products:", products.length);
+
+  // no products → end of catalog → STOP
+  if(products.length === 0){
+    console.log("[COMTRADE] No products — reached the last page. Stopping pagination.");
+    localStorage.removeItem(STORAGE_KEY);
+    return;
+  }
+
+  const batch = [];
 
   for(const product of products){
 
@@ -80,7 +97,7 @@ async function processPage(){
     const traits = product.querySelectorAll(".trait");
 
     if(!titleEl || !priceEl || !traits.length){
-      console.log("Skipped product — missing base elements");
+      console.log("[COMTRADE] skip — missing base elements");
       continue;
     }
 
@@ -101,18 +118,22 @@ async function processPage(){
       if(name.includes("Procesor")){
         cpu = normalize(value);
       }
-
       if(name.includes("Pamięć operacyjna")){
         ram = extractNumber(value);
       }
-
-      if(name.includes("Dysk twardy")){
+      // comtrade renamed this trait: was "Dysk twardy", now "Pojemność dysku"
+      if(name.includes("Pojemność dysku") || name.includes("Dysk twardy")){
         disk = extractNumber(value);
+        if(/SSD/i.test(value)) disk_type = "SSD";
+        else if(/HDD/i.test(value)) disk_type = "HDD";
       }
     });
 
-    if(title.includes("SSD")) disk_type = "SSD";
-    if(title.includes("HDD")) disk_type = "HDD";
+    // fallback disk type from title
+    if(!disk_type){
+      if(title.includes("SSD")) disk_type = "SSD";
+      else if(title.includes("HDD")) disk_type = "HDD";
+    }
 
     const price = priceEl.innerText
       .replace("zł","")
@@ -121,63 +142,65 @@ async function processPage(){
       .trim();
 
     if(!producer || !model || !cpu || !ram || !disk){
-      console.log("Skipped product — missing critical data:", title);
+      console.log("[COMTRADE] skip — missing critical data:", title, { producer, model, cpu, ram, disk });
       continue;
     }
 
-    const productData = {
-      producer,
-      model,
-      cpu,
-      ram_gb: ram,
-      disk_size: disk,
-      disk_type,
-      price,
-      link
-    };
+    batch.push({ producer, model, cpu, ram_gb: ram, disk_size: disk, disk_type, price, link });
+  }
 
-    console.log("Sending to Google:", productData);
+  console.log("[COMTRADE] → sending batch of", batch.length, "products");
 
+  if(batch.length === 0){
+    console.warn("[COMTRADE] nothing parsed on this page — stopping (avoid blind pagination).");
+    return;
+  }
+
+  // Send ALL products of this page in ONE request and WAIT before navigating
+  // (per-product async sends get cancelled by navigation → lost rows).
+  await new Promise((resolve)=>{
     GM_xmlhttpRequest({
       method:"POST",
       url:googleScriptURL,
       headers:{ "Content-Type":"application/json" },
-      data:JSON.stringify({
-        sheetName:SHEET_NAME,
-        data:[productData]
-      }),
-      onload: function(response) {
-        console.log("Google response:", response.status, response.responseText);
+      data:JSON.stringify({ sheetName:SHEET_NAME, data:batch }),
+      onload: (res)=>{
+        console.log("[COMTRADE] ← Google status:", res.status);
+        console.log("[COMTRADE] ← Google response:", res.responseText);
+        resolve();
       },
-      onerror: function(error) {
-        console.error("Google ERROR:", error);
-      }
+      onerror: (err)=>{ console.error("[COMTRADE] ✖ request FAILED:", err); resolve(); },
+      ontimeout: ()=>{ console.error("[COMTRADE] ✖ request TIMEOUT"); resolve(); }
     });
+  });
 
-    await sleep(500);
-  }
+  console.log("[COMTRADE] === PAGE DONE ===");
 
-  console.log("=== PAGE DONE ===");
+  await sleep(1000);
 
-  // ПЕРЕХІД НА НАСТУПНУ СТОРІНКУ (300ms)
   const state = getState();
   state.page++;
   saveState(state);
+  console.log("[COMTRADE] → next page:", state.page);
 
-  console.log("Going to next page:", state.page);
-
-  await sleep(300);
   window.location.href = location.origin + location.pathname + "?counter=" + state.page;
 }
 
 /* ================= RUN ================= */
 
-window.addEventListener("load", async ()=>{
+async function run(){
   if(!googleScriptURL){
-    console.warn("Google URL is not set — open the Tampermonkey menu → '⚙️ Set Google Script URL'");
+    console.warn("[COMTRADE] Google URL not set — Tampermonkey menu → ⚙️ Set Google Script URL");
     return;
   }
   await processPage();
-});
+}
+
+// run even if the 'load' event already fired before injection (document-idle)
+if(document.readyState === "complete"){
+  run();
+} else {
+  window.addEventListener("load", run);
+}
 
 })();
